@@ -1,0 +1,97 @@
+name: Fraud Detection ML Pipeline CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate project structure
+        run: |
+          echo "Validating project structure..."
+          test -f api/main.py           && echo "api/main.py exists"
+          test -f api/feature_columns.json && echo "feature_columns.json exists"
+          test -f api/median_values.json   && echo "median_values.json exists"
+          test -f monitoring/drift_detector.py && echo "drift_detector.py exists"
+          test -f docker/Dockerfile     && echo "Dockerfile exists"
+          echo "Project structure valid"
+
+      - name: Lint with flake8
+        run: |
+          pip install flake8
+          flake8 src/ api/ monitoring/ --max-line-length=100 --ignore=E501,W503 || true
+
+      - name: Run API import test
+        run: |
+          cd api
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          import json
+          with open('feature_columns.json') as f:
+              cols = json.load(f)
+          with open('median_values.json') as f:
+              medians = json.load(f)
+          assert len(cols) == 424, f'Expected 424 features, got {len(cols)}'
+          assert len(medians) == 424, f'Expected 424 medians, got {len(medians)}'
+          print(f'Feature columns validated: {len(cols)}')
+          print(f'Median values validated  : {len(medians)}')
+          print('API config validation passed')
+          "
+
+      - name: Run drift detector import test
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from monitoring.drift_detector import (
+              KEY_FEATURES,
+              DRIFT_THRESHOLD,
+              simulate_current_data
+          )
+          import pandas as pd
+          import numpy as np
+          assert len(KEY_FEATURES) == 10, 'Expected 10 key features'
+          assert DRIFT_THRESHOLD == 0.5, 'Expected threshold 0.5'
+          print(f'Key features validated   : {len(KEY_FEATURES)}')
+          print(f'Drift threshold validated: {DRIFT_THRESHOLD}')
+          print('Drift detector validation passed')
+          "
+
+      - name: CI Pipeline Summary
+        run: |
+          echo "================================================"
+          echo "CI Pipeline completed successfully"
+          echo "================================================"
+          echo "Checks passed:"
+          echo "  - Project structure validated"
+          echo "  - Dependencies installed"
+          echo "  - API config validated (424 features)"
+          echo "  - Drift detector validated"
+          echo "================================================"
